@@ -1,5 +1,7 @@
 export type Product = { id:string; name:string; category:string; description:string; image:string; price:number; old_price:number; active:number; automatic:number; stock:number };
 export const categories = ["Steam", "PlayStation", "Xbox", "Outros"];
+export const platformPath = (category:string) => `/plataforma/${category.toLowerCase()}`;
+export const productPath = (id:string) => `/jogo/${encodeURIComponent(id)}`;
 export const money = (n:number) => new Intl.NumberFormat("pt-BR", {style:"currency",currency:"BRL"}).format(n/100);
 export const samples: Product[] = [
  {id:"demo-1",name:"Cyberpunk 2077",category:"Steam",price:9990,old_price:19990,image:"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1091500/header.jpg",description:"Explore Night City em um RPG de mundo aberto. Edição padrão • PC • Brasil.",active:1,automatic:1,stock:0},
