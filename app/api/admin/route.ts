@@ -1,5 +1,4 @@
-import { env } from "cloudflare:workers";
-import { db, identity, failure, sameOrigin, config, reconcile, fulfill } from "../../../lib/server";
+import { db, identity, failure, sameOrigin, config, reconcile, fulfill, pixReady } from "../../../lib/server";
 import { z } from "zod";
 import { samples } from "../../../lib/catalog";
 const image=z.union([z.literal(""),z.string().url().refine(v=>v.startsWith("https://"))]);
@@ -7,9 +6,13 @@ const product=z.object({id:z.string().optional(),name:z.string().min(2).max(120)
 export async function GET() {
  try {
   const user=await identity(true);
+  if(pixReady()) {
+   const jobs=await db().prepare("SELECT o.* FROM appmax_webhook_jobs j JOIN orders o ON o.id=j.order_id ORDER BY j.received_at LIMIT 5").all<any>();
+   waitUntil(Promise.allSettled(jobs.results.map(order=>reconcile(order))));
+  }
   const products=await db().prepare("SELECT p.*, (SELECT COUNT(*) FROM keys k WHERE k.product_id=p.id AND k.order_id IS NULL) stock FROM products p WHERE deleted=0").all();
   const orders=await db().prepare("SELECT id,email,items,total,status,created_at,paid_at,delivered_at FROM orders ORDER BY created_at DESC LIMIT 5000").all();
-  return Response.json({products:products.results,orders:orders.results,settings:await config(),email:user.email,pixReady:!!(env.MP_ACCESS_TOKEN&&env.MP_WEBHOOK_SECRET&&env.SITE_URL)});
+  return Response.json({products:products.results,orders:orders.results,settings:await config(),email:user.email,pixReady:pixReady()});
  }catch(e){return failure(e);}
 }
 export async function POST(request:Request) {
@@ -41,3 +44,4 @@ export async function POST(request:Request) {
   return Response.json({ok:true});
  }catch(e){return failure(e);}
 }
+import { waitUntil } from "cloudflare:workers";

@@ -1,11 +1,38 @@
-export function paymentMatches(order: any, payment: any) {
- return payment.external_reference === order.id && payment.currency_id === "BRL" && payment.payment_method_id === "pix" && Math.round(Number(payment.transaction_amount)*100) === order.total;
+// Appmax API amounts are integer centavos. Webhook amounts are deliberately ignored.
+export function appmaxStatus(status: string): string {
+ const statuses: Record<string,string> = {
+  pendente:"pending", autorizado:"pending", aprovado:"approved", integrado:"approved",
+  pendente_integracao:"approved", pendente_integracao_em_analise:"review",
+  cancelado:"cancelled", estornado:"refunded", recusado_por_risco:"rejected",
+  chargeback_em_tratativa:"charged_back", chargeback_em_disputa:"charged_back",
+  chargeback_perdido:"charged_back", chargeback_vencido:"approved"
+ };
+ return statuses[status] || "pending";
 }
-export async function validSignature(request: Request, secret: string) {
- const url = new URL(request.url), id=url.searchParams.get("data.id")?.toLowerCase(), rid=request.headers.get("x-request-id");
- const signature = Object.fromEntries((request.headers.get("x-signature") || "").split(",").map(p=>p.trim().split("=")));
- if(!id || !rid || !signature.ts || !/^[0-9a-f]{64}$/.test(signature.v1 || "")) return false;
- const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(secret),{name:"HMAC",hash:"SHA-256"},false,["verify"]);
- const bytes=new Uint8Array(signature.v1.match(/../g)!.map((v:string)=>parseInt(v,16)));
- return crypto.subtle.verify("HMAC",key,bytes,new TextEncoder().encode(`id:${id};request-id:${rid};ts:${signature.ts};`));
+export function paymentMatches(order: any, data: any) {
+ const remote=data?.order, amounts=remote?.amounts;
+ if(order.payment_provider!=="appmax" || String(remote?.id)!==String(order.payment_id) || !order.payment_id) return false;
+ if(String(data.customer?.id)!==String(order.appmax_customer_id) || data.customer?.email?.toLowerCase()!==order.email.toLowerCase()) return false;
+ if(data.payment?.method && data.payment.method!=="pix") return false;
+ if(!amounts || ![amounts.sub_total,amounts.shipping_value,amounts.discount,amounts.installment_fee].every(Number.isSafeInteger)) return false;
+ if(amounts.sub_total+amounts.shipping_value-amounts.discount+amounts.installment_fee!==order.total) return false;
+ if(appmaxStatus(remote.status)==="approved" && (data.payment?.method!=="pix" || remote.total_paid!==order.total)) return false;
+ return true;
+}
+export function pixInstructions(data: any) {
+ const pix=data?.payment || data?.pix;
+ const qr=pix?.pix_emv || pix?.emv_code;
+ const source=pix?.pix_qrcode || pix?.qr_code;
+ const date=pix?.pix_expiration_date || pix?.expires_at;
+ // Appmax dates without an offset use Brasília time.
+ const timestamp=typeof date==="string" ? Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(date)?date.replace(" ","T")+"-03:00":date) : NaN;
+ if(typeof qr!=="string" || !qr || typeof source!=="string" || !Number.isFinite(timestamp)) return null;
+ const image=source.startsWith("data:image/png;base64,")?source: /^[A-Za-z0-9+/=\s]+$/.test(source)?`data:image/png;base64,${source.replace(/\s/g,"")}`:null;
+ if(!image) return null;
+ return {qr,image,expiresAt:timestamp};
+}
+export function webhookOrderId(payload: any): string | null {
+ if(payload?.event_type!=="order" || typeof payload.event!=="string" || !payload.event.startsWith("order_")) return null;
+ const id=payload.data?.order_id ?? payload.data?.order?.id;
+ return (typeof id==="number" && Number.isSafeInteger(id) && id>0) || (typeof id==="string" && /^[1-9]\d{0,15}$/.test(id)) ? String(id) : null;
 }
